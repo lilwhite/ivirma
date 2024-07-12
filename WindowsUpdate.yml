@@ -1,0 +1,161 @@
+---
+# DESCRIPTION
+# Apply windows updates
+# check
+#ansible-playbook WindowsUpdates.yml --tags check --ask-vault-pass -vv
+# Reboot
+#ansible-playbook WindowsUpdates.yml --tags reboot --ask-vault-pass -vv
+# install all available updates without reboot
+#ansible-playbook WindowsUpdates.yml --tags install --ask-vault-pass -vv
+# install all available with reboot
+#ansible-playbook WindowsUpdates.yml --tags install,reboot --ask-vault-pass -vv
+#install whitelist updates only
+#ansible-playbook WindowsUpdates.yml --tags installwhitelist -e wl="KB2267602","KB4052623" --ask-vault-pass -vv
+#install BlackList updates, the KB in Blacklist they are not installed
+#ansible-playbook WindowsUpdates.yml --tags installblacklist -e bl="KB2267602","KB4052623" --ask-vault-pass -vv
+
+- name: Ansible windows updates
+  hosts: DesarrolloWin
+  gather_facts: yes
+  tasks:
+  - block:
+    - name: Change Wuaserv to Manual if are Disable
+      win_service:
+        name: wuauserv
+        state: started
+        start_mode: manual
+      tags:
+      - check
+      - install
+      - installwhitelist
+      - installblacklist
+
+    - name: >
+        {{ 'Install' if 'install' in ansible_run_tags else 'Search' }} updates
+        {{ 'will automatically reboot' if 'reboot' in ansible_run_tags else 'no reboot' }}
+      win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - DefinitionUpdates
+          - Updates
+        reboot: "{{ 'yes' if 'reboot' in ansible_run_tags else 'no' }}"
+        state: "{{ 'installed' if 'install' in ansible_run_tags else 'searched' }}"
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      register: update_results
+      tags:
+      - never
+      - install
+      - check
+
+    - name: >
+        {{ 'InstallWhiteList' if 'installwhitelist' in ansible_run_tags else 'Search' }} updates whitelist
+        {{ 'will automatically reboot' if 'reboot' in ansible_run_tags else 'no reboot' }}
+      win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - DefinitionUpdates
+          - Updates
+        reboot: "{{ 'yes' if 'reboot' in ansible_run_tags else 'no' }}"
+        state: "{{ 'installed' if 'installwhitelist' in ansible_run_tags else 'searched' }}"
+        whitelist: "{{ wl }}"
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      register: update_results
+      tags:
+      - installwhitelist
+
+    - name: >
+        {{ 'InstallBlackList' if 'installblacklist' in ansible_run_tags else 'Search' }} updates
+        {{ 'will automatically reboot' if 'reboot' in ansible_run_tags else 'no reboot' }}
+      win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - DefinitionUpdates
+          - Updates
+        reboot: "{{ 'yes' if 'reboot' in ansible_run_tags else 'no' }}"
+        state: "{{ 'installed' if 'installblacklist' in ansible_run_tags else 'searched' }}"
+        blacklist: "{{ bl }}"
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      register: update_results
+      tags:
+      - installblacklist
+
+    rescue:
+    - name: Windows update failed?
+      debug:
+        msg: "error: {{ update_results.msg }}"
+      when: update_results is failed and update_results.msg is defined
+      tags:
+      - always
+    - name: Server had pending reboots?
+      win_reboot:
+      when:  not ansible_check_mode and
+            update_results is failed and
+            update_results.msg is search('A reboot is required')
+      tags:
+      - never
+      - reboot
+
+    always:
+    - name: Report results
+      debug:
+        var: update_results
+      tags:
+      - never
+      - install
+      - installwhitelist
+      - installblacklist
+      - check
+
+    - name: Report Installed Hotfix
+      script: 'WinUpdate.ps1'
+      register: Hotfix_update
+      tags:
+      - check
+      - install
+      - installwhitelist
+      - installblacklist
+
+    - debug:
+        msg: "{{Hotfix_update.stdout_lines}}"
+      tags:
+      - check
+      - install
+      - installwhitelist
+      - installblacklist
+
+    - name: Copy WindowsUpdates.csv for security report
+      fetch:
+        src: C:\UpdateReport\WindowsUpdates.csv
+        dest: /etc/ansible/reportes/
+      tags:
+      - check
+
+    - name: Copy WindowsUpdatesSO.csv for System update report
+      fetch:
+        src: C:\UpdateReport\WindowsUpdatesSO.csv
+        dest: /etc/ansible/reportes/
+      tags:
+      - check
+
+    - name: Change Wuaserv to Disable when finish
+      win_service:
+        name: wuauserv
+        state: stopped
+        start_mode: disabled
+      tags:
+      - check
+      - install
+      - installwhitelist
+      - installblacklist
